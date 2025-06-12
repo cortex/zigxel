@@ -39,11 +39,15 @@ const rgb_pio: hal.pio.Pio = hal.pio.num(0);
 const rgb_statemachine: hal.pio.StateMachine = .sm0;
 
 const put_rgb_program = blk: {
-    @setEvalBranchQuota(3000);
+    @setEvalBranchQuota(8000);
     break :blk hal.pio.assemble(
         \\.program put_rgb
         \\ set pindirs, 1
+        \\ .wrap_target
         \\    pull
+        \\    out pins 6
+        \\    set pins 0b001 [1]
+        \\    set pins 0b000 [1]
         \\    out pins 6
         \\    set pins 0b001 [1]
         \\    set pins 0b000 [1]
@@ -79,8 +83,10 @@ fn init_rgb_pio() void {
     rgb_pio.sm_set_enabled(rgb_statemachine, true);
 }
 
-pub fn write_packed_rgb_fifo(pp: colors.RGB2x3) void {
-    const pu32: u32 = @intCast(@as(u6, @bitCast(pp)));
+inline fn write_packed_rgb_fifo(pp1: colors.RGB2x3, pp2: colors.RGB2x3) void {
+    const p1: u32 = @intCast(@as(u6, @bitCast(pp1)));
+    const p2: u32 = @intCast(@as(u6, @bitCast(pp2)));
+    const pu32: u32 = (p2 << 6) | p1;
     rgb_pio.sm_write(rgb_statemachine, pu32);
 }
 
@@ -177,12 +183,12 @@ const gamma_lut: [256]u8 = blk: {
     break :blk tbl;
 };
 
-const TIME_DITHER_STEPS = 16;
-inline fn td_on(v: u8, t: usize) u1 {
-    return if (gamma_lut[v] > t) 1 else 0;
+const TIME_DITHER_STEPS = 8;
+inline fn td_on(v: usize, t: usize) u1 {
+    return @intFromBool(gamma_lut[v] > t);
 }
 
-inline fn temporal_dither(color: colors.RGBA32, t: u8) colors.RGB3 {
+inline fn temporal_dither(color: colors.RGBA32, t: usize) colors.RGB3 {
     return colors.RGB3{
         .r = td_on(color.r, t),
         .g = td_on(color.g, t),
@@ -213,8 +219,8 @@ pub fn scanout(_: Hub75, b: *buffer.DoubleBuffer) void {
                 data[c] = d;
                 // write_packed_rgb_fifo(d);
             }
-            for (0..COLS) |c| {
-                write_packed_rgb_fifo(data[c]);
+            for (0..(COLS / 2)) |c| {
+                write_packed_rgb_fifo(data[2 * c], data[2 * c + 1]);
             }
             write_addr_fifo(r);
         }
