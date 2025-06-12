@@ -4,20 +4,26 @@ const microzig = @import("microzig");
 const MicroBuild = microzig.MicroBuild(.{
     .rp2xxx = true,
 });
-
 pub fn build(b: *std.Build) void {
     const mz_dep = b.dependency("microzig", .{});
 
     const mb = MicroBuild.init(b, mz_dep) orelse return;
+    const target = mb.ports.rp2xxx.boards.raspberrypi.pico;
+    const optimize = std.builtin.OptimizeMode.ReleaseFast;
+
+    const zigimg_dependency = b.dependency("zigimg", .{
+        .optimize = optimize,
+    });
 
     const firmware = mb.add_firmware(.{
         .name = "zigxel",
-        .target = mb.ports.rp2xxx.boards.raspberrypi.pico,
+        .target = target,
         .optimize = .ReleaseSmall,
         .root_source_file = b.path("src/main.zig"),
     });
     mb.install_firmware(firmware, .{});
 
+    // firmware.add_app_import("zigimg", zigimg_dependency.module("zigimg"), .{});
     const picotool_flash = b.addSystemCommand(&.{"sudo"});
 
     picotool_flash.addArg("picotool");
@@ -35,4 +41,14 @@ pub fn build(b: *std.Build) void {
     flashStep.dependOn(&picotool_boot.step);
 
     // flashStep.dependOn(mb);
+
+    const exe = b.addExecutable(.{
+        .name = "image",
+        .root_source_file = b.path("src/import_png.zig"),
+        .target = b.graph.host,
+    });
+    exe.root_module.addImport("zigimg", zigimg_dependency.module("zigimg"));
+    const run_image_import = b.addRunArtifact(exe);
+    const imageStep = b.step("convert", "convert images");
+    imageStep.dependOn(&run_image_import.step);
 }
