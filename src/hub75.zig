@@ -3,6 +3,8 @@ const colors = @import("color.zig");
 const microzig = @import("microzig");
 const hal = microzig.hal;
 
+pub var screen_buffer = buffer.DoubleBuffer{};
+
 fn write_addr(h: Hub75, addr: Addr) void {
     h.pins.addr_a.put(~addr.a);
     h.pins.addr_b.put(~addr.b);
@@ -13,21 +15,7 @@ fn write_addr(h: Hub75, addr: Addr) void {
 const Pin = hal.gpio.Pin;
 
 pub const Hub75 = struct {
-    pins: struct {
-        addr_a: Pin,
-        addr_b: Pin,
-        addr_c: Pin,
-        addr_d: Pin,
-        latch: Pin,
-        clk: Pin,
-        output_enable: Pin,
-    },
-
-    pub fn init(h: *Hub75) void {
-        h.pins.addr_a.set_direction(.out);
-        h.pins.addr_b.set_direction(.out);
-        h.pins.addr_c.set_direction(.out);
-        h.pins.addr_d.set_direction(.out);
+    pub fn init(_: *Hub75) void {
         init_rgb_pio();
         if (latch_pio_enabled) {
             init_latch_addr_pio();
@@ -104,10 +92,10 @@ const latch_addr_program = blk: {
         \\ again:
         \\ pull block
         \\ out pins 4
-        \\ set pins 0b01 [4]
-        \\ set pins 0b00 [4]
-        \\ set pins 0b10 [4]
-        \\ set pins 0b00 [4]
+        \\ set pins 0b01 [2]
+        \\ set pins 0b00 [2]
+        \\ set pins 0b10 [2]
+        \\ set pins 0b00 [2]
         \\ jmp again
     , .{}).get_program_by_name("latch_addr");
 };
@@ -183,8 +171,9 @@ const gamma_lut: [256]u8 = blk: {
     break :blk tbl;
 };
 
-const TIME_DITHER_STEPS = 8;
+const TIME_DITHER_STEPS = 16;
 inline fn td_on(v: usize, t: usize) u1 {
+    // const scrambled_t = t ^ 0b1010;
     return @intFromBool(gamma_lut[v] > t);
 }
 
@@ -197,7 +186,8 @@ inline fn temporal_dither(color: colors.RGBA32, t: usize) colors.RGB3 {
 }
 
 const buffer = @import("buffer.zig");
-inline fn temporal_rgbbuf(buf: colors.Image, x: usize, y: usize, t: usize) colors.RGB3 {
+const image = @import("image.zig");
+inline fn temporal_rgbbuf(buf: image.DynamicImage(colors.RGBA32), x: usize, y: usize, t: usize) colors.RGB3 {
     const color_rgb: colors.RGBA32 = buf.read(x, y);
     return temporal_dither(color_rgb, @intCast(t));
 }
@@ -219,7 +209,7 @@ pub fn scanout(_: Hub75, b: *buffer.DoubleBuffer) void {
                 data[c] = d;
                 // write_packed_rgb_fifo(d);
             }
-            for (0..(COLS / 2)) |c| {
+            for (0..(COLS >> 1)) |c| {
                 write_packed_rgb_fifo(data[2 * c], data[2 * c + 1]);
             }
             write_addr_fifo(r);
@@ -228,13 +218,13 @@ pub fn scanout(_: Hub75, b: *buffer.DoubleBuffer) void {
 }
 pub var scanout_fps: u32 = 0;
 
-pub fn scanout_forever(h: Hub75, b: *buffer.DoubleBuffer) void {
+pub fn scanout_forever(h: Hub75) void {
     var i: usize = 0;
     var t = hal.time.get_time_since_boot();
     while (true) {
-        scanout(h, b);
+        scanout(h, &screen_buffer);
         i = i + 1;
-        if (i > 100) {
+        if (i > 10) {
             const nt = hal.time.get_time_since_boot();
             scanout_fps = @intCast(i * 1_000_000 / nt.diff(t).to_us());
             i = 0;

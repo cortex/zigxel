@@ -20,19 +20,10 @@ pub const RGBA32 = packed struct {
     a: u8 = 0,
 };
 
-pub const Image = struct {
-    width: usize,
-    height: usize,
-    pixels: []RGBA32,
-    pub fn read(img: Image, x: usize, y: usize) RGBA32 {
-        return img.pixels[y * img.width + x];
-    }
-    pub inline fn write(self: Image, x: usize, y: usize, c: RGBA32) void {
-        self.pixels[y * self.width + x] = c;
-    }
-};
-
 pub const WHITE = RGBA32{ .a = 0x00, .r = 0xff, .g = 0xff, .b = 0xff };
+pub const BLACK = RGBA32{ .a = 0x00, .r = 0x00, .g = 0x00, .b = 0x00 };
+pub const RED = RGBA32{ .a = 0x00, .r = 0xff, .g = 0x00, .b = 0x00 };
+pub const BLUE = RGBA32{ .a = 0x00, .r = 0x00, .g = 0x00, .b = 0xff };
 
 pub fn hslToRgba(h: u8, s: u8, l: u8) RGBA32 {
     const h16: u16 = @intCast(h);

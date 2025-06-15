@@ -1,6 +1,7 @@
 const microzig = @import("microzig");
 const hal = microzig.hal;
 const color = @import("color.zig");
+const image = @import("image.zig");
 const WIDTH = 64;
 const HEIGHT = 32;
 
@@ -23,7 +24,7 @@ pub const DoubleBuffer = struct {
         db.front_buffer_idx = ~db.front_buffer_idx;
         db.front_buffer_lock.unlock();
     }
-    pub fn front(self: *DoubleBuffer) color.Image {
+    pub fn front(self: *DoubleBuffer) image.DynamicImage(color.RGBA32) {
         const front_ptr: *[HEIGHT][WIDTH]color.RGBA32 = &self.buffers[self.front_buffer_idx];
 
         // Get a pointer to the first element (i.e., front_ptr[0][0])
@@ -32,14 +33,14 @@ pub const DoubleBuffer = struct {
         // Slice over the entire 2D buffer
         const flat: []color.RGBA32 = flat_ptr[0 .. WIDTH * HEIGHT];
 
-        return color.Image{
+        return image.DynamicImage(color.RGBA32){
             .width = WIDTH,
             .height = HEIGHT,
             .pixels = flat,
         };
     }
 
-    pub fn back(self: *DoubleBuffer) color.Image {
+    pub fn back(self: *DoubleBuffer) image.DynamicImage(color.RGBA32) {
         const front_ptr: *[HEIGHT][WIDTH]color.RGBA32 = &self.buffers[~self.front_buffer_idx];
 
         // Get a pointer to the first element (i.e., front_ptr[0][0])
@@ -48,7 +49,7 @@ pub const DoubleBuffer = struct {
         // Slice over the entire 2D buffer
         const flat: []color.RGBA32 = flat_ptr[0 .. WIDTH * HEIGHT];
 
-        return color.Image{
+        return image.DynamicImage(color.RGBA32){
             .width = WIDTH,
             .height = HEIGHT,
             .pixels = flat,
