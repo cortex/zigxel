@@ -37,11 +37,13 @@ pub fn scene(db: *buffer.DoubleBuffer) void {
     // render_ff_img(back_buffer, font_ff, 0, 0, (t >> 3) % 64, 0);
     // draw_rainbow(back_buffer, t);
     draw.draw_clear(back_buffer, color.BLACK);
+    const v = 0x90;
+    draw.draw_clear(back_buffer, color.RGBA32{ .r = v, .g = v, .b = v, .a = 0 });
     // fire.step();
     if (t % 4 == 0) {
         fire.step();
     }
-    fire.draw(back_buffer);
+    //fire.draw(back_buffer);
     font.draw_letter(back_buffer, 'S', t % 64, 0);
     font.draw_letter(back_buffer, 'A', t % 64, 6);
     font.draw_letter(back_buffer, 'R', t % 64, 12);

@@ -5,13 +5,6 @@ const hal = microzig.hal;
 
 pub var screen_buffer = buffer.DoubleBuffer{};
 
-fn write_addr(h: Hub75, addr: Addr) void {
-    h.pins.addr_a.put(~addr.a);
-    h.pins.addr_b.put(~addr.b);
-    h.pins.addr_c.put(~addr.c);
-    h.pins.addr_d.put(~addr.d);
-}
-
 const Pin = hal.gpio.Pin;
 
 pub const Hub75 = struct {
@@ -30,15 +23,11 @@ const put_rgb_program = blk: {
     @setEvalBranchQuota(8000);
     break :blk hal.pio.assemble(
         \\.program put_rgb
-        \\ set pindirs, 1
+        \\.side_set 1
+        \\ set pindirs 1 side 0
         \\ .wrap_target
-        \\    pull
-        \\    out pins 6
-        \\    set pins 0b001 [1]
-        \\    set pins 0b000 [1]
-        \\    out pins 6
-        \\    set pins 0b001 [1]
-        \\    set pins 0b000 [1]
+        \\    out pins 6 side 0 [0]
+        \\    nop side 1 [1]
     , .{}).get_program_by_name("put_rgb");
 };
 
@@ -51,30 +40,46 @@ fn init_rgb_pio() void {
     // rgb_pio.gpio_init(rp2xxx.gpio.num(12));
     rgb_pio.sm_load_and_start_program(rgb_statemachine, put_rgb_program, .{
         .clkdiv = hal.pio.ClkDivOptions.from_float(1),
-        .pin_mappings = .{ .out = .{
-            .base = 0,
-            .count = 6,
-        }, .set = .{
-            .base = 10,
-            .count = 1,
-        } },
+        .pin_mappings = .{
+            .out = .{
+                .base = 0,
+                .count = 6,
+            },
+            .set = .{
+                .base = 10,
+                .count = 1,
+            },
+            .side_set = .{
+                .base = 10,
+                .count = 1,
+            },
+        },
         .shift = .{
             .out_shiftdir = .left,
         },
     }) catch unreachable;
     std.log.info("Initialized pio", .{});
     rgb_pio.sm_set_shift_options(rgb_statemachine, .{
-        .join_tx = true,
+        // .join_tx = true,
+        .autopull = true,
+        .pull_threshold = 24,
     });
     rgb_pio.sm_set_pindir(rgb_statemachine, 0, 6, .out);
     // rgb_pio.sm_set_pindir(rgb_statemachine, 10, 1, .out);
     rgb_pio.sm_set_enabled(rgb_statemachine, true);
 }
 
-inline fn write_packed_rgb_fifo(pp1: colors.RGB2x3, pp2: colors.RGB2x3) void {
+inline fn write_packed_rgb_fifo(
+    pp1: colors.RGB2x3,
+    pp2: colors.RGB2x3,
+    pp3: colors.RGB2x3,
+    pp4: colors.RGB2x3,
+) void {
     const p1: u32 = @intCast(@as(u6, @bitCast(pp1)));
     const p2: u32 = @intCast(@as(u6, @bitCast(pp2)));
-    const pu32: u32 = (p2 << 6) | p1;
+    const p3: u32 = @intCast(@as(u6, @bitCast(pp3)));
+    const p4: u32 = @intCast(@as(u6, @bitCast(pp4)));
+    const pu32: u32 = (p4 << 18) | (p3 << 12) | (p2 << 6) | p1;
     rgb_pio.sm_write(rgb_statemachine, pu32);
 }
 
@@ -92,10 +97,10 @@ const latch_addr_program = blk: {
         \\ again:
         \\ pull block
         \\ out pins 4
-        \\ set pins 0b01 [2]
-        \\ set pins 0b00 [2]
-        \\ set pins 0b10 [2]
-        \\ set pins 0b00 [2]
+        \\ set pins 0b01 [1]
+        \\ set pins 0b00 [1]
+        \\ set pins 0b10 [1]
+        \\ set pins 0b00 [1]
         \\ jmp again
     , .{}).get_program_by_name("latch_addr");
 };
@@ -171,7 +176,7 @@ const gamma_lut: [256]u8 = blk: {
     break :blk tbl;
 };
 
-const TIME_DITHER_STEPS = 16;
+const TIME_DITHER_STEPS = 4;
 inline fn td_on(v: usize, t: usize) u1 {
     // const scrambled_t = t ^ 0b1010;
     return @intFromBool(gamma_lut[v] > t);
@@ -195,7 +200,6 @@ inline fn temporal_rgbbuf(buf: image.DynamicImage(colors.RGBA32), x: usize, y: u
 pub fn scanout(_: Hub75, b: *buffer.DoubleBuffer) void {
     b.lock();
     const fb = b.front();
-    b.unlock();
     var data: [COLS]colors.RGB2x3 = undefined;
     for (0..(TIME_DITHER_STEPS)) |t| {
         for (0..PACKED_ROWS) |r| {
@@ -209,12 +213,20 @@ pub fn scanout(_: Hub75, b: *buffer.DoubleBuffer) void {
                 data[c] = d;
                 // write_packed_rgb_fifo(d);
             }
-            for (0..(COLS >> 1)) |c| {
-                write_packed_rgb_fifo(data[2 * c], data[2 * c + 1]);
+            //send data to fifo 4x2 pixels at a time
+            write_addr_fifo(r - 1);
+            for (0..(COLS >> 2)) |c| {
+                write_packed_rgb_fifo(
+                    data[4 * c],
+                    data[4 * c + 1],
+                    data[4 * c + 2],
+                    data[4 * c + 3],
+                );
             }
-            write_addr_fifo(r);
         }
     }
+
+    b.unlock();
 }
 pub var scanout_fps: u32 = 0;
 

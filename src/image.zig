@@ -20,7 +20,7 @@ pub fn StaticImage(comptime T: type, comptime width: usize, comptime height: usi
         pub fn read(self: @This(), x: usize, y: usize) T {
             return self.pixels[y * self.width + x];
         }
-        pub inline fn write(self: *@This(), x: usize, y: usize, c: T) void {
+        pub fn write(self: *@This(), x: usize, y: usize, c: T) void {
             self.pixels[y * self.width + x] = c;
         }
     };
