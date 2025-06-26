@@ -2,7 +2,7 @@
 
 a microzig-based hub75 panel demo
 
-![video](./zigxel.webm)
+[zigxel.webm](https://github.com/user-attachments/assets/91c7fec2-ce17-4f4d-890e-a59bb1af747b)
 
 Features:
 - Hub75 driver using PIO
