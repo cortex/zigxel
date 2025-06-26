@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) void {
     const firmware = mb.add_firmware(.{
         .name = "zigxel",
         .target = target,
-        .optimize = .ReleaseSmall,
+        .optimize = .ReleaseFast,
         .root_source_file = b.path("src/main.zig"),
     });
     mb.install_firmware(firmware, .{});
@@ -43,12 +43,13 @@ pub fn build(b: *std.Build) void {
     // flashStep.dependOn(mb);
 
     const exe = b.addExecutable(.{
-        .name = "image",
+        .name = "convert",
         .root_source_file = b.path("src/import_png.zig"),
         .target = b.graph.host,
     });
     exe.root_module.addImport("zigimg", zigimg_dependency.module("zigimg"));
     const run_image_import = b.addRunArtifact(exe);
+    run_image_import.addArg("src/assets");
     const imageStep = b.step("convert", "convert images");
     imageStep.dependOn(&run_image_import.step);
 }

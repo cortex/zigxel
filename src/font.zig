@@ -3,9 +3,12 @@ const image = @import("image.zig");
 const color = @import("color.zig");
 const draw = @import("draw.zig");
 
-const font_bin = @embedFile("assets/font.bin");
+const font_bin = @embedFile("assets/font8x8wide.bin");
 
-const fontmap = "1234567890ABCDEFGHIJKLMNOPQRSTUVXYZÅÄÖ♥";
+const fontmap = "1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZÅÄÖabcdefghijklmnopqrstuvwxyzåäö🙂♥";
+const font_width = 8;
+const font_height = 8;
+
 fn find_letter_index(l: u21) ?usize {
     var view = std.unicode.Utf8View.init(fontmap) catch unreachable;
     var iterator = view.iterator();
@@ -21,18 +24,27 @@ fn find_letter_index(l: u21) ?usize {
 
 pub fn draw_letter(dest: image.DynamicImage(color.RGBA32), letter: u21, x: usize, y: usize) void {
     const idx = find_letter_index(letter);
-    // std.log.info("found letter {?} at {?}", .{ letter, idx });
     if (idx) |index| {
         draw.draw_image(dest, font_sheet, x, y, .{
-            .src_x = 8 * index,
+            .src_x = font_width * index,
             .src_y = 0,
-            .w = 8,
-            .h = 8,
+            .w = font_width,
+            .h = font_height,
         });
     }
 }
 
-var buf: [1024 * 10]u8 = undefined;
+pub fn draw_string(dest: image.DynamicImage(color.RGBA32), str: []const u8, x: usize, y: usize) void {
+    var view = std.unicode.Utf8View.init(str) catch unreachable;
+    var iterator = view.iterator();
+    var i: u8 = 0;
+    while (iterator.nextCodepoint()) |letter| {
+        draw_letter(dest, letter, x, y + i * (font_width - 1));
+        i += 1;
+    }
+}
+
+var buf: [1024 * 20]u8 = undefined;
 var font_sheet: image.DynamicImage(color.RGBA32) = undefined;
 fn image_from_bin(img_bin: [*]const u8) !image.DynamicImage(color.RGBA32) {
     const src_width = std.mem.readInt(u32, img_bin[0..4], .little);

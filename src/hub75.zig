@@ -1,20 +1,69 @@
 const std = @import("std");
-const colors = @import("color.zig");
-const microzig = @import("microzig");
-const hal = microzig.hal;
+const color = @import("color.zig");
+const image = @import("image.zig");
+const hal = @import("microzig").hal;
 
-pub var screen_buffer = buffer.DoubleBuffer{};
+pub var screen_buffer = DoubleBuffer{};
+const WIDTH = 64;
+const HEIGHT = 32;
 
-const Pin = hal.gpio.Pin;
+pub const Buffer = [HEIGHT][WIDTH]color.RGBA32;
 
-pub const Hub75 = struct {
-    pub fn init(_: *Hub75) void {
-        init_rgb_pio();
-        if (latch_pio_enabled) {
-            init_latch_addr_pio();
-        }
+pub const DoubleBuffer = struct {
+    buffers: [2]Buffer = undefined,
+    front_buffer_idx: u1 = 0,
+    front_buffer_lock: hal.mutex.CoreMutex = hal.mutex.CoreMutex{},
+
+    // Locks the buffer from being swapped
+    pub fn lock(db: *DoubleBuffer) void {
+        return db.front_buffer_lock.lock();
+    }
+    pub fn unlock(db: *DoubleBuffer) void {
+        return db.front_buffer_lock.unlock();
+    }
+    pub fn swap(db: *DoubleBuffer) void {
+        db.front_buffer_lock.lock();
+        prepare_scanout(db.front());
+        db.front_buffer_idx = ~db.front_buffer_idx;
+        db.front_buffer_lock.unlock();
+    }
+    pub fn front(self: *DoubleBuffer) image.DynamicImage(color.RGBA32) {
+        const front_ptr: *[HEIGHT][WIDTH]color.RGBA32 = &self.buffers[self.front_buffer_idx];
+
+        // Get a pointer to the first element (i.e., front_ptr[0][0])
+        const flat_ptr: [*]color.RGBA32 = @ptrCast(&front_ptr[0][0]);
+
+        // Slice over the entire 2D buffer
+        const flat: []color.RGBA32 = flat_ptr[0 .. WIDTH * HEIGHT];
+
+        return image.DynamicImage(color.RGBA32){
+            .width = WIDTH,
+            .height = HEIGHT,
+            .pixels = flat,
+        };
+    }
+
+    pub fn back(self: *DoubleBuffer) image.DynamicImage(color.RGBA32) {
+        const front_ptr: *[HEIGHT][WIDTH]color.RGBA32 = &self.buffers[~self.front_buffer_idx];
+
+        // Get a pointer to the first element (i.e., front_ptr[0][0])
+        const flat_ptr: [*]color.RGBA32 = @ptrCast(&front_ptr[0][0]);
+
+        // Slice over the entire 2D buffer
+        const flat: []color.RGBA32 = flat_ptr[0 .. WIDTH * HEIGHT];
+
+        return image.DynamicImage(color.RGBA32){
+            .width = WIDTH,
+            .height = HEIGHT,
+            .pixels = flat,
+        };
     }
 };
+
+pub fn init() void {
+    init_rgb_pio();
+    init_latch_addr_pio();
+}
 
 const rgb_pio: hal.pio.Pio = hal.pio.num(0);
 const rgb_statemachine: hal.pio.StateMachine = .sm0;
@@ -70,10 +119,10 @@ fn init_rgb_pio() void {
 }
 
 inline fn write_packed_rgb_fifo(
-    pp1: colors.RGB2x3,
-    pp2: colors.RGB2x3,
-    pp3: colors.RGB2x3,
-    pp4: colors.RGB2x3,
+    pp1: color.RGB2x3,
+    pp2: color.RGB2x3,
+    pp3: color.RGB2x3,
+    pp4: color.RGB2x3,
 ) void {
     const p1: u32 = @intCast(@as(u6, @bitCast(pp1)));
     const p2: u32 = @intCast(@as(u6, @bitCast(pp2)));
@@ -83,11 +132,14 @@ inline fn write_packed_rgb_fifo(
     rgb_pio.sm_write(rgb_statemachine, pu32);
 }
 
-inline fn write_addr_fifo(a: u32) void {
-    latch_addr_pio.sm_write(latch_addr_statemachine, ~a);
-}
+const addr_payload = packed struct { addr: u4, sleep: u8, _padding: u20 = 0 };
 
-const latch_pio_enabled = true;
+inline fn write_addr_fifo(addr: u4, bitplane: u3) void {
+    const t: u8 = 1;
+    const sleep: u8 = t << (7 - bitplane);
+    const payload = addr_payload{ .addr = ~addr, .sleep = sleep };
+    latch_addr_pio.sm_write(latch_addr_statemachine, @bitCast(payload));
+}
 
 const latch_addr_program = blk: {
     @setEvalBranchQuota(8000);
@@ -95,13 +147,17 @@ const latch_addr_program = blk: {
         \\.program latch_addr
         \\ set pindirs 0b11
         \\ again:
-        \\ pull block
-        \\ out pins 4
-        \\ set pins 0b01 [1]
-        \\ set pins 0b00 [1]
-        \\ set pins 0b10 [1]
-        \\ set pins 0b00 [1]
-        \\ jmp again
+        \\     pull block
+        \\     out pins 4 [1]
+        \\     set pins 0b11 [4]// Latch
+        \\     set pins 0b10 [4]
+        \\     set pins 0b00 [4] // OE
+        \\     out x 3
+        \\ sleep:
+        \\     jmp x-- sleep [24] // Sleep according to bitplane
+        \\     set pins 0b10 [1]
+        \\     push 1
+        \\     jmp again
     , .{}).get_program_by_name("latch_addr");
 };
 
@@ -117,7 +173,7 @@ fn init_latch_addr_pio() void {
         latch_addr_statemachine,
         latch_addr_program,
         .{
-            .clkdiv = hal.pio.ClkDivOptions.from_float(1),
+            .clkdiv = hal.pio.ClkDivOptions.from_float(16),
             .pin_mappings = .{
                 .out = .{
                     .base = 6,
@@ -135,30 +191,11 @@ fn init_latch_addr_pio() void {
     ) catch unreachable;
     std.log.info("Initialized latch pio", .{});
     latch_addr_pio.sm_set_shift_options(latch_addr_statemachine, .{
-        .join_tx = true,
+        .join_tx = false,
     });
     latch_addr_pio.sm_set_pindir(latch_addr_statemachine, 6, 4, .out);
     latch_addr_pio.sm_set_enabled(latch_addr_statemachine, true);
 }
-
-const Addr = packed struct {
-    a: u1,
-    b: u1,
-    c: u1,
-    d: u1,
-    fn U4(v: u4) Addr {
-        return @bitCast(v);
-    }
-    fn U32(v: u32) Addr {
-        return U4(@intCast(v));
-    }
-};
-
-pub const ROWS: usize = 32;
-pub const COLS: usize = 64;
-const PACKED_ROWS = ROWS >> 1;
-
-// var framebuffer: [PACKED_ROWS * COLS]u6 = undefined;
 
 const gamma_lut: [256]u8 = blk: {
     @setEvalBranchQuota(20000);
@@ -171,76 +208,92 @@ const gamma_lut: [256]u8 = blk: {
         else
             std.math.pow(f32, (c + 0.055) / 1.055, gamma);
         // Rescale to TIME_DITHER_STEPS
-        tbl[i] = @intFromFloat(lin * TIME_DITHER_STEPS);
+        tbl[i] = @intFromFloat(lin * 255);
     }
     break :blk tbl;
 };
 
-const TIME_DITHER_STEPS = 4;
-inline fn td_on(v: usize, t: usize) u1 {
-    // const scrambled_t = t ^ 0b1010;
-    return @intFromBool(gamma_lut[v] > t);
-}
+const BITPLANES = 8;
 
-inline fn temporal_dither(color: colors.RGBA32, t: usize) colors.RGB3 {
-    return colors.RGB3{
-        .r = td_on(color.r, t),
-        .g = td_on(color.g, t),
-        .b = td_on(color.b, t),
+inline fn bitplane_color(c: color.RGBA32, bitplane: u3) color.RGB3 {
+    const bp_inv: u3 = @intCast(7 - bitplane);
+    return color.RGB3{
+        .r = @intCast((gamma_lut[c.r] >> bp_inv) & 1),
+        .g = @intCast((gamma_lut[c.g] >> bp_inv) & 1),
+        .b = @intCast((gamma_lut[c.b] >> bp_inv) & 1),
     };
 }
-
-const buffer = @import("buffer.zig");
-const image = @import("image.zig");
-inline fn temporal_rgbbuf(buf: image.DynamicImage(colors.RGBA32), x: usize, y: usize, t: usize) colors.RGB3 {
-    const color_rgb: colors.RGBA32 = buf.read(x, y);
-    return temporal_dither(color_rgb, @intCast(t));
+test "gamma lut" {
+    const result = gamma_lut[255];
+    const expected: u8 = 255;
+    std.debug.print("{b} {b}\n", .{ expected, result });
+    return std.testing.expectEqual(expected, result);
 }
 
-pub fn scanout(_: Hub75, b: *buffer.DoubleBuffer) void {
-    b.lock();
-    const fb = b.front();
-    var data: [COLS]colors.RGB2x3 = undefined;
-    for (0..(TIME_DITHER_STEPS)) |t| {
-        for (0..PACKED_ROWS) |r| {
-            for (0..COLS) |c| {
-                const x = c;
-                const y1 = r;
-                const y2 = y1 + 16;
-                const p1 = temporal_rgbbuf(fb, x, y1, t);
-                const p2 = temporal_rgbbuf(fb, x, y2, t);
-                const d = colors.RGB2x3{ .p1 = p2, .p2 = p1 };
-                data[c] = d;
-                // write_packed_rgb_fifo(d);
-            }
-            //send data to fifo 4x2 pixels at a time
-            write_addr_fifo(r - 1);
-            for (0..(COLS >> 2)) |c| {
-                write_packed_rgb_fifo(
-                    data[4 * c],
-                    data[4 * c + 1],
-                    data[4 * c + 2],
-                    data[4 * c + 3],
-                );
+test "bitplane_color" {
+    const c = color.RGBA32{ .r = 255, .g = 0, .b = 0, .a = 0 };
+    const bp = 1;
+    const expected: u3 = @bitCast(color.RGB3{ .r = 1, .g = 0, .b = 0 });
+    const result: u3 = @bitCast(bitplane_color(c, bp));
+    std.debug.print("{b} {b}\n", .{ expected, result });
+    return std.testing.expectEqual(result, expected);
+}
+
+const pt = @import("perf_timer.zig");
+pub var fps_timer: pt.PerfTimer = undefined;
+pub var prep_timer: pt.PerfTimer = undefined;
+pub var addr_timer: pt.PerfTimer = undefined;
+pub var scanout_timer: pt.PerfTimer = undefined;
+
+const PACKED_ROWS = HEIGHT >> 1;
+
+var scanout_buffer: [BITPLANES][PACKED_ROWS][WIDTH]color.RGB2x3 = undefined;
+
+pub fn prepare_scanout(fb: image.DynamicImage(color.RGBA32)) void {
+    prep_timer.start();
+    for (0..BITPLANES) |bitplane_usize| {
+        const bitplane: u3 = @intCast(bitplane_usize);
+        for (0..PACKED_ROWS) |y| {
+            for (0..WIDTH) |x| {
+                const p1 = fb.read(x, y);
+                const p2 = fb.read(x, y + 16);
+                const bp1 = bitplane_color(p1, bitplane);
+                const bp2 = bitplane_color(p2, bitplane);
+                const d = color.RGB2x3{ .p1 = bp2, .p2 = bp1 };
+                scanout_buffer[bitplane][y][x] = d;
             }
         }
     }
-
-    b.unlock();
+    prep_timer.lap();
 }
-pub var scanout_fps: u32 = 0;
 
-pub fn scanout_forever(h: Hub75) void {
-    var i: usize = 0;
-    var t = hal.time.get_time_since_boot();
-    while (true) {
-        scanout(h, &screen_buffer);
-        i = i + 1;
-        if (i > 10) {
-            const nt = hal.time.get_time_since_boot();
-            scanout_fps = @intCast(i * 1_000_000 / nt.diff(t).to_us());
-            i = 0;
-            t = nt;
+pub fn scanout(_: *DoubleBuffer) void {
+    for (0..BITPLANES) |bitplane_usize| {
+        const bitplane: u3 = @intCast(bitplane_usize);
+        for (0..PACKED_ROWS) |row_usize| {
+            const row: u4 = @intCast(row_usize);
+            scanout_timer.start();
+            for (0..(WIDTH / 4)) |c| {
+                write_packed_rgb_fifo(
+                    scanout_buffer[bitplane][row][4 * c],
+                    scanout_buffer[bitplane][row][4 * c + 1],
+                    scanout_buffer[bitplane][row][4 * c + 2],
+                    scanout_buffer[bitplane][row][4 * c + 3],
+                );
+            }
+            scanout_timer.lap();
+            addr_timer.start();
+            write_addr_fifo(row, bitplane);
+            _ = latch_addr_pio.sm_blocking_read(latch_addr_statemachine);
+            addr_timer.lap();
         }
+    }
+}
+
+pub fn scanout_forever() void {
+    fps_timer.reset();
+    while (true) {
+        scanout(&screen_buffer);
+        fps_timer.lap();
     }
 }

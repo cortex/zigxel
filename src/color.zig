@@ -3,6 +3,7 @@ pub const RGB3 = packed struct {
     g: u1,
     b: u1,
 };
+
 pub const RGB2x3 = packed struct {
     p1: RGB3,
     p2: RGB3,
@@ -18,12 +19,16 @@ pub const RGBA32 = packed struct {
     g: u8 = 0,
     b: u8 = 0,
     a: u8 = 0,
+    pub fn init(r: u8, g: u8, b: u8, a: u8) RGBA32 {
+        return RGBA32{ .r = r, .g = g, .b = b, .a = a };
+    }
 };
 
 pub const WHITE = RGBA32{ .a = 0x00, .r = 0xff, .g = 0xff, .b = 0xff };
 pub const BLACK = RGBA32{ .a = 0x00, .r = 0x00, .g = 0x00, .b = 0x00 };
 pub const RED = RGBA32{ .a = 0x00, .r = 0xff, .g = 0x00, .b = 0x00 };
 pub const BLUE = RGBA32{ .a = 0x00, .r = 0x00, .g = 0x00, .b = 0xff };
+pub const GREEN = RGBA32{ .a = 0x00, .r = 0x00, .g = 0xff, .b = 0x00 };
 
 pub fn hslToRgba(h: u8, s: u8, l: u8) RGBA32 {
     const h16: u16 = @intCast(h);

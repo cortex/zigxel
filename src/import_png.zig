@@ -1,16 +1,12 @@
 const std = @import("std");
 const zigimg = @import("zigimg");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-
-    const allocator = gpa.allocator();
-
-    var image = try zigimg.Image.fromFilePath(allocator, "./src/font/font.png");
+fn convert(src_path: []const u8, target_path: []const u8) !void {
+    const allocator = std.heap.page_allocator;
+    var image = try zigimg.Image.fromFilePath(allocator, src_path);
     defer image.deinit();
     const file = try std.fs.cwd().createFile(
-        "src/font/font.bin",
+        target_path,
         .{ .read = true },
     );
     defer file.close();
@@ -25,15 +21,49 @@ pub fn main() !void {
     std.mem.writeInt(u32, &height_buf, @intCast(image.height), .little);
     try file.writeAll(&height_buf);
 
+    if (image.pixelFormat() != .rgba32) {
+        try image.convert(.rgba32);
+    }
+
     for (0..image.width) |src_x| {
         for (0..image.height) |src_y| {
-            std.log.info("x: {} y:{}", .{ src_x, src_y });
             const p = image.pixels.rgba32;
             const pixel = p[image.width * src_y + src_x];
             const rgb = pixel.to.u32Rgb(); // u32: 0x00RRGGBB
             var rgb_buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &rgb_buf, rgb, .little);
             try file.writeAll(&rgb_buf);
+        }
+    }
+}
+
+pub fn main() !void {
+    const alloc = std.heap.page_allocator;
+    const args = try std.process.argsAlloc(alloc);
+    defer std.process.argsFree(alloc, args);
+
+    if (args.len < 2) {
+        std.log.err("Usage: {s} <asset_dir> ", .{args[0]});
+        return error.InvalidArguments;
+    }
+    const dir_path = args[1];
+    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
+    var dir_iter = dir.iterate();
+    defer dir.close();
+
+    while (try dir_iter.next()) |entry| {
+        if (entry.kind == .file and
+            std.mem.eql(u8, std.fs.path.extension(entry.name), ".png"))
+        {
+            const out = try std.mem.concat(
+                std.heap.page_allocator,
+                u8,
+                &.{ std.fs.path.stem(entry.name), ".bin" },
+            );
+            const in_path = try std.fs.path.join(alloc, &.{ dir_path, entry.name });
+            const out_path = try std.fs.path.join(alloc, &.{ dir_path, out });
+            try convert(in_path, out_path);
+            std.log.info("wrote {s}", .{out_path});
         }
     }
 }

@@ -114,7 +114,7 @@ fn rainbow(v: u8) color.RGBA32 {
     return c;
 }
 
-fn draw_rainbow(img: color.Image, t: u64) void {
+pub fn draw_rainbow(img: image.DynamicImage(color.RGBA32), t: u64) void {
     for (0..img.width) |x| {
         for (0..img.height) |y| {
             const x8: u8 = @intCast(x * 255 / img.width);
@@ -147,9 +147,65 @@ pub fn draw_image(
             const c = src.read(opts.src_x + w, opts.src_y + h);
             if ((x + h) < dest.width and (y + w) < dest.height) {
                 if (c == color.WHITE) {
-                    dest.write(x + h, y + w, c);
+                    dest.write(x + h, y + w, color.RED);
                 }
             }
         }
     }
+}
+
+fn blend(from: u8, to: u8, steps: u8, step: u8) u8 {
+    if (steps == 0) return from;
+    const l: i32 = @as(i32, to) - @as(i32, from);
+    const result = @as(i32, from) + @divTrunc(l * @as(i32, step), @as(i32, steps));
+    return @intCast(@max(0, @min(255, result)));
+}
+
+fn blend_color(from: color.RGBA32, to: color.RGBA32, steps: u8, step: u8) color.RGBA32 {
+    const r = blend(from.r, to.r, steps, step);
+    const g = blend(from.g, to.g, steps, step);
+    const b = blend(from.b, to.b, steps, step);
+    const a = blend(from.a, to.a, steps, step);
+    return color.RGBA32.init(r, g, b, a);
+}
+
+fn gradient(comptime steps: []const color.RGBA32) [255]color.RGBA32 {
+    @setEvalBranchQuota(2000);
+    var lut: [255]color.RGBA32 = undefined;
+
+    for (0..255) |i| {
+        // Map LUT index to position in gradient using fixed-point arithmetic
+        // Scale i by (steps.len - 1) to get position across all segments
+        const scaled_pos = i * (steps.len - 1);
+
+        // Find which segment this position falls into
+        const segment: u8 = @min(scaled_pos / 254, steps.len - 2);
+
+        // Calculate position within the segment (0 to 254)
+        const segment_start = segment * 254;
+        const local_pos = scaled_pos - segment_start;
+
+        // Scale local position to 0-255 range for blending
+        const blend_step: u8 = @intCast((local_pos * 255) / 254);
+
+        lut[i] = blend_color(steps[segment], steps[segment + 1], 255, blend_step);
+    }
+
+    return lut;
+}
+
+const bw = gradient(&[_]color.RGBA32{ color.BLACK, color.WHITE });
+
+pub fn draw_with_func(img: image.DynamicImage(color.RGBA32), t: u64, comptime draw_fn: fn (usize, usize, u64) color.RGBA32) void {
+    for (0..img.width) |x| {
+        for (0..img.height) |y| {
+            const c = draw_fn(x, y, t);
+            img.write(x, y, c);
+        }
+    }
+}
+
+pub fn gradient_draw(x: usize, _: usize, _: u64) color.RGBA32 {
+    const step: u8 = @intCast((x * 4) % 255);
+    return bw[step];
 }
